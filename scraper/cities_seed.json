@@ -1,0 +1,112 @@
+[
+  {
+    "city": "Nashville",
+    "county": "Davidson",
+    "targets": [
+      { "name": "Franklin", "county": "Williamson" },
+      { "name": "Brentwood", "county": "Williamson" },
+      { "name": "Smyrna", "county": "Rutherford" },
+      { "name": "Mount Juliet", "county": "Wilson" },
+      { "name": "Hendersonville", "county": "Sumner" }
+    ]
+  },
+  {
+    "city": "Memphis",
+    "county": "Shelby",
+    "targets": [
+      { "name": "Germantown", "county": "Shelby" },
+      { "name": "Bartlett", "county": "Shelby" },
+      { "name": "Collierville", "county": "Shelby" },
+      { "name": "Lakeland", "county": "Shelby" },
+      { "name": "Southaven", "county": "DeSoto" }
+    ]
+  },
+  {
+    "city": "Knoxville",
+    "county": "Knox",
+    "targets": [
+      { "name": "Farragut", "county": "Knox" },
+      { "name": "Maryville", "county": "Blount" },
+      { "name": "Alcoa", "county": "Blount" },
+      { "name": "Clinton", "county": "Anderson" },
+      { "name": "Powell", "county": "Knox" }
+    ]
+  },
+  {
+    "city": "Chattanooga",
+    "county": "Hamilton",
+    "targets": [
+      { "name": "East Ridge", "county": "Hamilton" },
+      { "name": "Hixson", "county": "Hamilton" },
+      { "name": "Red Bank", "county": "Hamilton" },
+      { "name": "Soddy-Daisy", "county": "Hamilton" },
+      { "name": "Signal Mountain", "county": "Hamilton" }
+    ]
+  },
+  {
+    "city": "Clarksville",
+    "county": "Montgomery",
+    "targets": [
+      { "name": "Sango", "county": "Montgomery" },
+      { "name": "Woodlawn", "county": "Montgomery" },
+      { "name": "Oak Grove", "county": "Christian" },
+      { "name": "Dover", "county": "Stewart" },
+      { "name": "Adams", "county": "Robertson" }
+    ]
+  },
+  {
+    "city": "Murfreesboro",
+    "county": "Rutherford",
+    "targets": [
+      { "name": "La Vergne", "county": "Rutherford" },
+      { "name": "Smyrna", "county": "Rutherford" },
+      { "name": "Lascassas", "county": "Rutherford" },
+      { "name": "Rockvale", "county": "Rutherford" },
+      { "name": "Eagleville", "county": "Rutherford" }
+    ]
+  },
+  {
+    "city": "Jackson",
+    "county": "Madison",
+    "targets": [
+      { "name": "Medina", "county": "Gibson" },
+      { "name": "Humboldt", "county": "Gibson" },
+      { "name": "Beech Bluff", "county": "Madison" },
+      { "name": "Oakfield", "county": "Madison" },
+      { "name": "Three Way", "county": "Madison" }
+    ]
+  },
+  {
+    "city": "Johnson City",
+    "county": "Washington",
+    "targets": [
+      { "name": "Jonesborough", "county": "Washington" },
+      { "name": "Elizabethton", "county": "Carter" },
+      { "name": "Gray", "county": "Washington" },
+      { "name": "Boones Creek", "county": "Washington" },
+      { "name": "Piney Flats", "county": "Sullivan" }
+    ]
+  },
+  {
+    "city": "Kingsport",
+    "county": "Sullivan",
+    "targets": [
+      { "name": "Colonial Heights", "county": "Sullivan" },
+      { "name": "Blountville", "county": "Sullivan" },
+      { "name": "Mount Carmel", "county": "Hawkins" },
+      { "name": "Church Hill", "county": "Hawkins" },
+      { "name": "Gate City", "county": "Scott" }
+    ]
+  },
+  {
+    "city": "Cleveland",
+    "county": "Bradley",
+    "targets": [
+      { "name": "Charleston", "county": "Bradley" },
+      { "name": "East Cleveland", "county": "Bradley" },
+      { "name": "Hopewell", "county": "Bradley" },
+      { "name": "Wildwood Lake", "county": "Bradley" },
+      { "name": "McDonald", "county": "Bradley" }
+    ]
+  }
+]
