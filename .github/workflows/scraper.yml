@@ -17,8 +17,10 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install Supabase client
-        run: pip install supabase
+      - name: Install Python dependencies
+        run: |
+          pip install supabase
+          pip install python-dotenv
 
       - name: Run scraper
         run: python scraper/scraper.py
