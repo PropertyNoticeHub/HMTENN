@@ -1,0 +1,36 @@
+name: Scrape & Deploy
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Runs every day at 2 AM UTC
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install supabase
+
+      - name: Run scraper
+        run: python scraper/scraper.py
+
+      - name: Deduplicate listings
+        run: python scraper/deduplicate.py
+
+      - name: Upload to Supabase
+        run: python scraper/upload_to_supabase.py
+
+      - name: Generate Sitemap
+        run: npm run sitemap
+
+      - name: Trigger Vercel Rebuild
+        run: curl -X POST "https://api.vercel.com/v1/integrations/deploy/YOUR_PROJECT_ID" \
+             -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}"

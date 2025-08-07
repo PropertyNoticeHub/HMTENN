@@ -1,0 +1,18 @@
+[
+  {
+    "name": "Franklin Handy Pros",
+    "address": "123 Main St, Franklin, TN",
+    "phone": "(615) 555-1234",
+    "website": "https://franklinhandypros.com",
+    "city": "franklin",
+    "service": "handyman"
+  },
+  {
+    "name": "Nashville Repair Experts",
+    "address": "456 Elm St, Nashville, TN",
+    "phone": "(615) 555-5678",
+    "website": "https://nashvillerepairexperts.com",
+    "city": "nashville",
+    "service": "plumbing"
+  }
+]

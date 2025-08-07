@@ -1,0 +1,26 @@
+{
+  "name": "hmtenn",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "scrape": "python scraper/scraper.py",
+    "deduplicate": "python scraper/deduplicate.py",
+    "upload": "python scraper/upload_to_supabase.py",
+    "sitemap": "node src/scripts/generate-sitemap.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.3",
+    "dotenv": "^17.2.1",
+    "next": "14.2.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "eslint": "8.57.0",
+    "eslint-config-next": "14.2.5"
+  }
+}
