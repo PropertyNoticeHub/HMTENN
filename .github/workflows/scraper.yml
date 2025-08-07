@@ -1,12 +1,12 @@
-name: Scrape & Deploy
+name: Run Handyman Scraper
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # Every day at 2 AM UTC
+    - cron: "0 2 * * *" # Run every day at 2AM UTC
   workflow_dispatch:
 
 jobs:
-  update:
+  scrape:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -15,15 +15,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.x'
+          python-version: "3.11"
 
       - name: Install Python dependencies
         run: |
-          pip install supabase
+          pip install -r scraper/requirements.txt
           pip install python-dotenv
-
-      - name: Install Node.js dependencies
-        run: npm ci
 
       - name: Run scraper
         run: python scraper/scraper.py
@@ -34,12 +31,10 @@ jobs:
       - name: Upload to Supabase
         run: python scraper/upload_to_supabase.py
 
-      - name: Generate sitemap
+      - name: Regenerate sitemap
         run: npm run sitemap
 
-      - name: Trigger Vercel Rebuild (No Hook)
+      - name: Trigger Vercel Deploy (API)
         run: |
-          curl -X POST https://api.vercel.com/v1/projects/hmtenn/deployments \
-            -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d '{"name":"hmtenn","gitSource":{"type":"github","repoId":"PropertyNoticeHub/HMTENN"}}'
+          curl -X POST "https://api.vercel.com/v1/integrations/deploy/prj_xxxxxxx" \
+          -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}"

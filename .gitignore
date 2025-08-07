@@ -3,3 +3,6 @@ node_modules/
 .DS_Store
 .next/
 .vercel
+# Scraper-specific ignores
+__pycache__/
+scraper/exports/
