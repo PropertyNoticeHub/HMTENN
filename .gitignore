@@ -1,8 +1,16 @@
+﻿# Ignore system & build folders
 node_modules/
 .env
 .DS_Store
 .next/
 .vercel
-# Scraper-specific ignores
+
+# Ignore all files in scraper/exports
+scraper/exports/*
+
+# Allow JSON exports and the folder itself
+!scraper/exports/*.json
+!scraper/exports/
+
+# Python temp folders
 __pycache__/
-scraper/exports/

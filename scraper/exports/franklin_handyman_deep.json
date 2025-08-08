@@ -1,0 +1,98 @@
+[
+  {
+    "name": "HANDYMAN-TN LLC",
+    "address": null,
+    "phone": "+16154384054",
+    "website": "https://www.handyman-tn.com/",
+    "city": "Franklin",
+    "service": "handyman",
+    "reviews": {
+      "rating": "5.0",
+      "count": 47
+    }
+  },
+  {
+    "name": "Running Buffalo Resources Inc.",
+    "address": null,
+    "phone": "+16153905378",
+    "website": "https://www.rbrhandyman.com/",
+    "city": "Franklin",
+    "service": "handyman",
+    "reviews": {
+      "rating": "5.0",
+      "count": 27
+    }
+  },
+  {
+    "name": "Harwell’s Handyman service",
+    "address": "101 Gillespie Dr, Franklin, TN 37067",
+    "phone": null,
+    "website": "https://www.harwellthehandyman.com/",
+    "city": "Franklin",
+    "service": "handyman",
+    "reviews": {
+      "rating": "5.0",
+      "count": null
+    }
+  },
+  {
+    "name": "ProNet Residential Services",
+    "address": "3325 Aspen Grove Dr STE 101, Franklin, TN 37067",
+    "phone": "+16157781928",
+    "website": "https://www.pronetresidential.com/",
+    "city": "Franklin",
+    "service": "handyman",
+    "reviews": {
+      "rating": "5.0",
+      "count": 3
+    }
+  },
+  {
+    "name": "Mr. Handyman of Franklin and Brentwood",
+    "address": "8226 Neal Rd Suite 2, Arrington, TN 37014",
+    "phone": "+16154368967",
+    "website": "https://www.mrhandyman.com/brentwood-franklin/?cid=LSTL_MHM000197&utm_source=gmb&utm_campaign=local&utm_medium=organic",
+    "city": "Franklin",
+    "service": "handyman",
+    "reviews": {
+      "rating": "4.8",
+      "count": 153
+    }
+  },
+  {
+    "name": "Pro Services Handyman",
+    "address": null,
+    "phone": "+16156560988",
+    "website": "https://proserviceshandyman.com/",
+    "city": "Franklin",
+    "service": "handyman",
+    "reviews": {
+      "rating": "5.0",
+      "count": 27
+    }
+  },
+  {
+    "name": "Huckleberry Home Improvement, LLC",
+    "address": "625 Grange Hill Ct, Franklin, TN 37067",
+    "phone": "+16155729898",
+    "website": "http://wyattworkswonders.com/",
+    "city": "Franklin",
+    "service": "handyman",
+    "reviews": {
+      "rating": "5.0",
+      "count": 17
+    }
+  },
+  {
+    "name": "The Honey Do Service, Inc Franklin",
+    "address": "5083 Main St #5b, Spring Hill, TN 37174",
+    "phone": "+16152659656",
+    "website": "https://honeydoservice.com/improving/franklin-tn/",
+    "city": "Franklin",
+    "service": "handyman",
+    "reviews": {
+      "rating": "4.7",
+      "count": 88
+    }
+  }
+]
