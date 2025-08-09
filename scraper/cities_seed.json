@@ -5,9 +5,14 @@
     "targets": [
       { "name": "Franklin", "county": "Williamson" },
       { "name": "Brentwood", "county": "Williamson" },
-      { "name": "Smyrna", "county": "Rutherford" },
+      { "name": "Hendersonville", "county": "Sumner" },
       { "name": "Mount Juliet", "county": "Wilson" },
-      { "name": "Hendersonville", "county": "Sumner" }
+      { "name": "Lebanon", "county": "Wilson" },
+      { "name": "Spring Hill", "county": "Maury" },
+      { "name": "Goodlettsville", "county": "Davidson" },
+      { "name": "Belle Meade", "county": "Davidson" },
+      { "name": "Madison", "county": "Davidson" },
+      { "name": "Antioch", "county": "Davidson" }
     ]
   },
   {
@@ -18,7 +23,12 @@
       { "name": "Bartlett", "county": "Shelby" },
       { "name": "Collierville", "county": "Shelby" },
       { "name": "Lakeland", "county": "Shelby" },
-      { "name": "Southaven", "county": "DeSoto" }
+      { "name": "Arlington", "county": "Shelby" },
+      { "name": "Millington", "county": "Shelby" },
+      { "name": "Horn Lake", "county": "DeSoto" },
+      { "name": "Southaven", "county": "DeSoto" },
+      { "name": "Olive Branch", "county": "DeSoto" },
+      { "name": "West Memphis", "county": "Crittenden" }
     ]
   },
   {
@@ -28,8 +38,13 @@
       { "name": "Farragut", "county": "Knox" },
       { "name": "Maryville", "county": "Blount" },
       { "name": "Alcoa", "county": "Blount" },
+      { "name": "Powell", "county": "Knox" },
       { "name": "Clinton", "county": "Anderson" },
-      { "name": "Powell", "county": "Knox" }
+      { "name": "Oak Ridge", "county": "Anderson" },
+      { "name": "Halls Crossroads", "county": "Knox" },
+      { "name": "Seymour", "county": "Sevier" },
+      { "name": "Lenoir City", "county": "Loudon" },
+      { "name": "Loudon", "county": "Loudon" }
     ]
   },
   {
@@ -40,7 +55,12 @@
       { "name": "Hixson", "county": "Hamilton" },
       { "name": "Red Bank", "county": "Hamilton" },
       { "name": "Soddy-Daisy", "county": "Hamilton" },
-      { "name": "Signal Mountain", "county": "Hamilton" }
+      { "name": "Signal Mountain", "county": "Hamilton" },
+      { "name": "Lookout Mountain", "county": "Hamilton" },
+      { "name": "Collegedale", "county": "Hamilton" },
+      { "name": "Ooltewah", "county": "Hamilton" },
+      { "name": "Tyner", "county": "Hamilton" },
+      { "name": "Fort Oglethorpe", "county": "Catoosa" }
     ]
   },
   {
