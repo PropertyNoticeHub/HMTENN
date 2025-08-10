@@ -1,8 +1,11 @@
 ﻿name: "Nightly Scope-Replace - Scrape-only -> Upload -> Sitemap -> Vercel"
 
 on:
+  push:
+    branches:
+      - feature/scraper-hardening-v1   # allow runs from your working branch
   schedule:
-    - cron: "0 2 * * *" # 02:00 UTC nightly
+    - cron: "0 2 * * *"                # 02:00 UTC nightly
   workflow_dispatch:
 
 jobs:
@@ -56,10 +59,10 @@ jobs:
         run: |
           python scraper/upload_to_supabase.py --apply-deletes
 
-      # ---------- Sitemap from live DB ----------
+      # ---------- Sitemap from live DB (guarded) ----------
       - name: Regenerate sitemap (Node script)
         run: |
-          npm run sitemap
+          npm run sitemap || echo "No sitemap script or frontend not ready — skipping"
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
@@ -79,7 +82,7 @@ jobs:
           name: sitemap-${{ github.run_id }}
           path: public/sitemap.xml
 
-      # ---------- Trigger Vercel deployment via API ----------
+      # ---------- Trigger Vercel deployment via API (guarded) ----------
       - name: Trigger Vercel Deploy (Deployments API)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
