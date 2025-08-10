@@ -1,4 +1,4 @@
-﻿name: Nightly Scope-Replace: Scrape-only -> Upload -> Sitemap -> Vercel
+﻿name: "Nightly Scope-Replace - Scrape-only -> Upload -> Sitemap -> Vercel"
 
 on:
   schedule:
@@ -18,7 +18,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Python + Playwright (for the scraper)
+      # ---------- Python + Playwright (scraper) ----------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -33,7 +33,7 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      # Node (for sitemap)
+      # ---------- Node (sitemap) ----------
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -44,32 +44,33 @@ jobs:
         run: |
           if [ -f package-lock.json ]; then npm ci; elif [ -f package.json ]; then npm install; else echo "No package.json; skipping npm install"; fi
 
-      # SCRAPER: Scope-Replace mode => scrape-only JSON, no DB writes here
+      # ---------- Scrape-only (no DB writes inside scraper) ----------
       - name: Run scraper (scrape-only)
         run: |
           python scraper/scraper.py --scrape-only
         env:
           SERVICES: handyman
 
-      # UPLOADER: UPSERT + scoped deletes (uses service role)
+      # ---------- Uploader: Scope-Replace (UPSERT + scoped deletes) ----------
       - name: Run uploader (UPSERT + scoped deletes)
         run: |
           python scraper/upload_to_supabase.py --apply-deletes
 
-      # SITEMAP: regenerate from live DB
-      - name: Regenerate sitemap
+      # ---------- Sitemap from live DB ----------
+      - name: Regenerate sitemap (Node script)
         run: |
           npm run sitemap
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
-      # ARTIFACTS: keep last night's JSON + optional sitemap
+      # ---------- Artifacts (exports, optional sitemap) ----------
       - name: Upload exports as artifact
         uses: actions/upload-artifact@v4
         with:
           name: scraper-exports-${{ github.run_id }}
-          path: scraper/exports/*.json
+          path: |
+            scraper/exports/*.json
 
       - name: Upload sitemap if present
         if: ${{ hashFiles('public/sitemap.xml') != '' }}
@@ -78,7 +79,7 @@ jobs:
           name: sitemap-${{ github.run_id }}
           path: public/sitemap.xml
 
-      # VERCEL: trigger a deployment using the token + project slug secret
+      # ---------- Trigger Vercel deployment via API ----------
       - name: Trigger Vercel Deploy (Deployments API)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
