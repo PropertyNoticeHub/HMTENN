@@ -20,10 +20,10 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+      - name: Baby Test - Validate Workflow File
+        run: echo "YAML file is valid!"
 
       # ---------- Python + Playwright (scraper) ----------
-      - name: Debug Supabase URL Secret
-        run: echo "Supabase URL is: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
