@@ -1,0 +1,29 @@
+name: "Quick Test - YAML and Python Syntax"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Baby Test - Validate Workflow File
+        run: echo "YAML file is valid!"
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          
+      - name: Check Python Syntax (Scraper)
+        run: |
+          python -m compileall scraper/scraper.py
+          python -m py_compile scraper/scraper.py
+          
+      - name: Check Python Syntax (Uploader)
+        run: |
+          python -m compileall scraper/upload_to_supabase.py
+          python -m py_compile scraper/upload_to_supabase.py
