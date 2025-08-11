@@ -4,13 +4,12 @@ import json
 import os
 from pathlib import Path
 from typing import Dict, List, Tuple, Set
-
-import requests
 from dotenv import load_dotenv
+import requests
 from urllib.parse import quote
-
+if os.getenv('CI') != 'true':
+    load_dotenv(dotenv_path='.env.local')
 # ---------- env ----------
-load_dotenv(dotenv_path=".env.local")
 
 SUPABASE_URL  = os.getenv("NEXT_PUBLIC_SUPABASE_URL", "").rstrip("/")
 ANON_KEY      = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")

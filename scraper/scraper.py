@@ -22,6 +22,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 import requests
+import argparse
 
 # ------------------------
 # Configuration
@@ -363,7 +364,7 @@ async def parse_detail(page, url: str, city: str, service: str) -> Optional[Dict
             pass
 
         site_el = await page.query_selector('a[data-item-id="authority"]') \
-                  or await page.query_selector('a[data-tooltip="Open website"]')
+                 or await page.query_selector('a[data-tooltip="Open website"]')
         if site_el:
             site = await site_el.get_attribute("href") or ""
             business["website"] = site.strip()
@@ -525,7 +526,7 @@ async def scrape_and_collect_for_target(browser, target_city: str, target_county
     logging.warning(f"[SKIP] No results to save for {target_city}")
     return []
 
-async def collect_all_rows() -> List[Dict[str, Any]]:
+async def collect_all_rows(only_city: str | None) -> List[Dict[str, Any]]:
     services = get_services()
     logging.info(f"[RUN] Services: {services}")
 
@@ -538,7 +539,15 @@ async def collect_all_rows() -> List[Dict[str, Any]]:
                 logging.info(f"[SERVICE] === {service} ===")
                 for metro in CITY_CONFIG:
                     targets = [{"name": metro["city"], "county": metro["county"]}] + metro.get("targets", [])
+                    
+                    # Filter based on the top-level city or its targets
+                    if only_city and not any(t["name"].lower() == only_city.lower() for t in targets):
+                        continue
+                    
                     for target in targets:
+                        if only_city and target["name"].lower() != only_city.lower():
+                            continue
+                        
                         rows = await scrape_and_collect_for_target(
                             browser=browser,
                             target_city=target["name"],
@@ -551,12 +560,12 @@ async def collect_all_rows() -> List[Dict[str, Any]]:
             await browser.close()
     return all_rows
 
-async def run_with_optional_upload(scrape_only: bool) -> None:
+async def run_with_optional_upload(scrape_only: bool, only_city: str | None) -> None:
     """
     If scrape_only=True -> just scrape and write exports. NEVER touch DB.
     If scrape_only=False -> legacy safety-net path (backup -> truncate -> upload) for local/manual use only.
     """
-    all_rows = await collect_all_rows()
+    all_rows = await collect_all_rows(only_city)
 
     if scrape_only:
         logging.info("[MODE] SCRAPE-ONLY: Completed. No DB writes performed.")
@@ -595,8 +604,8 @@ def _resolve_scrape_only_from_args_env(parsed_value: Optional[bool]) -> bool:
     return os.getenv("CI", "").lower() == "true"
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser(description="TN Google Maps scraper (exports only by default on CI).")
+    parser.add_argument("--only-city", default=None, help='Limit to one city, e.g. "Franklin"')
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--scrape-only", dest="scrape_only", action="store_true",
                        help="Scrape and write JSON exports only (NEVER touch DB).")
@@ -608,4 +617,4 @@ if __name__ == "__main__":
     scrape_only = _resolve_scrape_only_from_args_env(args.scrape_only)
     logging.info(f"[CONFIG] scrape_only={scrape_only} (CI={os.getenv('CI','')})")
 
-    asyncio.run(run_with_optional_upload(scrape_only))
+    asyncio.run(run_with_optional_upload(scrape_only, args.only_city))
