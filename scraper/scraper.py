@@ -3,7 +3,7 @@
 # Phase 1 changes (no API, no place_id):
 # - Add state="TN" (seed-driven; no address parsing)
 # - Add maps_url from page.url()
-# - Read services from scraper/services_seed.json when SERVICES env is empty
+# - Read services from scraper/services_seed.json when SERVICES is empty
 # - Upload payload remains unchanged (no new columns touched)
 
 import asyncio
@@ -29,6 +29,7 @@ load_dotenv(dotenv_path=".env.local")
 
 SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "businesses")
 
 EXPORT_DIR = Path("scraper/exports")
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -187,7 +188,7 @@ def _parse_float(val: Any) -> Optional[float]:
     return None
 
 # ------------------------
-# Supabase helpers (unchanged payload to avoid schema issues)
+# Supabase helpers (payload includes Phase 1 fields)
 # ------------------------
 def _sb_headers(json_mode: bool = False) -> Dict[str, str]:
     h = {
@@ -209,7 +210,7 @@ def backup_supabase_table() -> List[Dict[str, Any]]:
         headers["Range"] = f"{start}-{end}"
         try:
             resp = requests.get(
-                f"{SUPABASE_URL}/rest/v1/businesses?select=*",
+                f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*",
                 headers=headers,
                 timeout=60,
             )
@@ -229,7 +230,7 @@ def backup_supabase_table() -> List[Dict[str, Any]]:
         page += 1
 
     ts = _now_ts()
-    backup_path = EXPORT_DIR / f"supabase_businesses_backup_{ts}.json"
+    backup_path = EXPORT_DIR / f"supabase_{SUPABASE_TABLE}_backup_{ts}.json"
     try:
         with open(backup_path, "w", encoding="utf-8") as f:
             json.dump(all_rows, f, ensure_ascii=False, indent=2)
@@ -238,22 +239,34 @@ def backup_supabase_table() -> List[Dict[str, Any]]:
         logging.error(f"[SUPABASE BACKUP] write failed: {e}")
     return all_rows
 
-def truncate_supabase_table() -> bool:
-    logging.info("[SUPABASE] Truncating businesses table before upload...")
+def truncate_supabase_table(only_city: Optional[str]) -> bool:
+    """
+    Supabase REST blocks full-table DELETE without a filter.
+    If only_city is provided (e.g., --only-city 'Franklin'), delete just that scope.
+    """
+    if only_city:
+        logging.info(f"[SUPABASE] Deleting rows from {SUPABASE_TABLE} where city='{only_city}'...")
+        url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?city=eq.{quote(only_city)}"
+    else:
+        logging.info(f"[SUPABASE] Truncating {SUPABASE_TABLE} table before upload...")
+        url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
+
     resp = requests.delete(
-        f"{SUPABASE_URL}/rest/v1/businesses",
+        url,
         headers={**_sb_headers(), "Prefer": "return=minimal"},
         timeout=60,
     )
     if resp.status_code in (200, 204):
-        logging.info("[SUPABASE] Table truncated successfully.")
+        logging.info("[SUPABASE] Delete completed.")
         return True
-    logging.error(f"[SUPABASE] Failed to truncate table: {resp.status_code} {resp.text}")
+
+    # Common safety error from PostgREST when no WHERE clause is provided.
+    logging.error(f"[SUPABASE] Failed to delete: {resp.status_code} {resp.text}")
     return False
 
 def _normalize_payload_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    # DO NOT include new fields yet; Supabase may not have columns.
-    STRING_FIELDS = {"name", "address", "phone", "website", "city", "service"}
+    # Include new Phase 1 fields now that staging has columns.
+    STRING_FIELDS = {"name", "address", "phone", "website", "city", "service", "state", "maps_url"}
     INT_FIELDS = {"review_count"}
     FLOAT_FIELDS = {"avg_rating"}
 
@@ -279,7 +292,7 @@ def upload_businesses_chunked(businesses: List[Dict[str, Any]]) -> None:
         payload = [_normalize_payload_row(b) for b in chunk]
         try:
             resp = requests.post(
-                f"{SUPABASE_URL}/rest/v1/businesses",
+                f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}",
                 headers=headers,
                 json=payload,
                 timeout=120,
@@ -293,8 +306,8 @@ def upload_businesses_chunked(businesses: List[Dict[str, Any]]) -> None:
 
 def restore_supabase_from_backup(backup_rows: List[Dict[str, Any]]) -> None:
     logging.warning("[RESTORE] Attempting restore from backup...")
-    if not truncate_supabase_table():
-        logging.error("[RESTORE] Could not truncate before restore.")
+    if not truncate_supabase_table(None):
+        logging.error("[RESTORE] Could not delete existing rows before restore.")
         return
     try:
         upload_businesses_chunked(backup_rows)
@@ -529,7 +542,7 @@ async def scrape_city(context, browser, target_city: str, target_county: str, se
             pass
         return results
 
-async def scrape_and_collect_for_target(browser, target_city: str, target_county: str, service: str) -> List[Dict[str, Any]]:
+async def scrape_and_collect_for_target(browser, target_city: str, target_county: str, service: str) -> List[Dict[str, Any]]:      
     city_slug = target_city.lower().replace(" ", "_")
     service_slug = service.lower().replace(" ", "_")
     deep_path = EXPORT_DIR / f"{city_slug}_{service_slug}_deep.json"
@@ -595,7 +608,7 @@ async def collect_all_rows(only_city: str | None) -> List[Dict[str, Any]]:
 async def run_with_optional_upload(scrape_only: bool, only_city: str | None) -> None:
     """
     If scrape_only=True -> just scrape and write exports. NEVER touch DB.
-    If scrape_only=False -> legacy backup->truncate->upload path (unchanged payload).
+    If scrape_only=False -> backup -> scoped delete (if only_city) -> upload.
     """
     all_rows = await collect_all_rows(only_city)
 
@@ -606,13 +619,13 @@ async def run_with_optional_upload(scrape_only: bool, only_city: str | None) -> 
         return
 
     if not all_rows:
-        logging.error("[ABORT] Scrape produced 0 rows. Skipping truncate; leaving Supabase untouched.")
+        logging.error("[ABORT] Scrape produced 0 rows. Skipping delete; leaving Supabase untouched.")
         return
 
     backup_rows = backup_supabase_table()
 
-    if not truncate_supabase_table():
-        logging.error("[ABORT] Truncate failed; leaving existing data in place.")
+    if not truncate_supabase_table(only_city):
+        logging.error("[ABORT] Delete failed; leaving existing data in place.")
         return
 
     try:
@@ -637,7 +650,7 @@ if __name__ == "__main__":
     group.add_argument("--scrape-only", dest="scrape_only", action="store_true",
                        help="Scrape and write JSON exports only (NEVER touch DB).")
     group.add_argument("--with-upload", dest="scrape_only", action="store_false",
-                       help="After scraping, run legacy backup->truncate->upload (local/manual use only).")
+                       help="After scraping, run backup->scoped delete->upload (local/manual or CI-gated).")
     parser.set_defaults(scrape_only=None)
     args = parser.parse_args()
 
