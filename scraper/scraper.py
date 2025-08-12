@@ -1,12 +1,10 @@
 # scraper/scraper.py
 # Production-hardened Google Maps scraper for TN queries
-# - Multi-service via SERVICES env (CSV or JSON). Default: ["handyman"]
-# - City-scoped dedupe; global seen to avoid cross-city dupes (our domain bypasses)
-# - "Pin when present" for handyman-tn.com (no force-include)
-# - Robust list/detail parsing with Playwright
-# - Exports written to scraper/exports as <city>_<service>_{deep,flat}.json
-# - NEW: --scrape-only flag -> in CI (CI=true) defaults to True. When True, the scraper NEVER writes to DB.
-# - If --with-upload is provided (or CI not set and you pass it), the legacy backup->truncate->upload path is available for local/manual use only.
+# Phase 1 changes (no API, no place_id):
+# - Add state="TN" (seed-driven; no address parsing)
+# - Add maps_url from page.url()
+# - Read services from scraper/services_seed.json when SERVICES env is empty
+# - Upload payload remains unchanged (no new columns touched)
 
 import asyncio
 import json
@@ -56,6 +54,9 @@ BLOCK_URL_PATTERNS = [
 HANDYMAN_TN_DOMAIN_KEY = "handyman-tn.com"
 SUPABASE_CHUNK_SIZE = 500
 
+# Phase 1: fixed state for Tennessee
+STATE_VALUE = "TN"
+
 LOGGING_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOGGING_FORMAT, datefmt="%Y-%m-%d %H:%M:%S")
 
@@ -69,21 +70,48 @@ def _now_ts() -> str:
     return datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
 # ------------------------
-# Services (multi-service, env-driven)
+# Services (multi-service, env or seed file)
 # ------------------------
-def get_services() -> List[str]:
+def _services_from_env() -> Optional[List[str]]:
     raw = (os.getenv("SERVICES") or "").strip()
     if not raw:
-        return ["handyman"]
+        return None
+    # Try JSON array first
     try:
         parsed = json.loads(raw)
         if isinstance(parsed, list):
             vals = [str(x).strip() for x in parsed if str(x).strip()]
-            return vals or ["handyman"]
+            return vals or None
     except Exception:
         pass
+    # Fallback CSV
     vals = [x.strip() for x in raw.split(",") if x.strip()]
-    return vals or ["handyman"]
+    return vals or None
+
+def _services_from_file(path: Path) -> Optional[List[str]]:
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            vals = [str(x).strip() for x in data if str(x).strip()]
+            return vals or None
+    except Exception as e:
+        logging.warning(f"[SERVICES] Failed to read {path}: {e}")
+    return None
+
+def get_services() -> List[str]:
+    env_vals = _services_from_env()
+    if env_vals:
+        logging.info(f"[SERVICES] Using SERVICES env: {env_vals}")
+        return env_vals
+    file_vals = _services_from_file(Path("scraper/services_seed.json"))
+    if file_vals:
+        logging.info(f"[SERVICES] Using services_seed.json: {file_vals}")
+        return file_vals
+    logging.info("[SERVICES] Defaulting to ['handyman']")
+    return ["handyman"]
 
 # ------------------------
 # Utility helpers
@@ -107,6 +135,7 @@ def promote_handyman_tn(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return featured + non_featured
 
 def deduplicate_local(businesses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # Keep existing dedupe (name+website) to avoid risk changes
     seen: Set[Tuple[str, str]] = set()
     unique: List[Dict[str, Any]] = []
     for b in businesses:
@@ -158,7 +187,7 @@ def _parse_float(val: Any) -> Optional[float]:
     return None
 
 # ------------------------
-# Supabase helpers (left intact for optional local/manual use)
+# Supabase helpers (unchanged payload to avoid schema issues)
 # ------------------------
 def _sb_headers(json_mode: bool = False) -> Dict[str, str]:
     h = {
@@ -223,6 +252,7 @@ def truncate_supabase_table() -> bool:
     return False
 
 def _normalize_payload_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    # DO NOT include new fields yet; Supabase may not have columns.
     STRING_FIELDS = {"name", "address", "phone", "website", "city", "service"}
     INT_FIELDS = {"review_count"}
     FLOAT_FIELDS = {"avg_rating"}
@@ -326,6 +356,9 @@ async def parse_detail(page, url: str, city: str, service: str) -> Optional[Dict
         "service": service,
         "review_count": None,
         "avg_rating": None,
+        # New fields for Phase 1
+        "state": STATE_VALUE,
+        "maps_url": "",
     }
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -333,6 +366,9 @@ async def parse_detail(page, url: str, city: str, service: str) -> Optional[Dict
             await page.wait_for_load_state("networkidle", timeout=AFTER_NAV_NETWORK_IDLE_MS)
         except PWTimeout:
             pass
+
+        # Canonical Maps URL after navigation
+        business["maps_url"] = page.url
 
         try:
             await page.wait_for_selector("h1.DUwDvf, h1[role='heading']", timeout=DETAIL_NAME_TIMEOUT_MS)
@@ -539,15 +575,11 @@ async def collect_all_rows(only_city: str | None) -> List[Dict[str, Any]]:
                 logging.info(f"[SERVICE] === {service} ===")
                 for metro in CITY_CONFIG:
                     targets = [{"name": metro["city"], "county": metro["county"]}] + metro.get("targets", [])
-                    
-                    # Filter based on the top-level city or its targets
                     if only_city and not any(t["name"].lower() == only_city.lower() for t in targets):
                         continue
-                    
                     for target in targets:
                         if only_city and target["name"].lower() != only_city.lower():
                             continue
-                        
                         rows = await scrape_and_collect_for_target(
                             browser=browser,
                             target_city=target["name"],
@@ -563,7 +595,7 @@ async def collect_all_rows(only_city: str | None) -> List[Dict[str, Any]]:
 async def run_with_optional_upload(scrape_only: bool, only_city: str | None) -> None:
     """
     If scrape_only=True -> just scrape and write exports. NEVER touch DB.
-    If scrape_only=False -> legacy safety-net path (backup -> truncate -> upload) for local/manual use only.
+    If scrape_only=False -> legacy backup->truncate->upload path (unchanged payload).
     """
     all_rows = await collect_all_rows(only_city)
 
@@ -573,7 +605,6 @@ async def run_with_optional_upload(scrape_only: bool, only_city: str | None) -> 
             logging.warning("[SCRAPE-ONLY] 0 rows produced.")
         return
 
-    # Not scrape-only: local/manual path
     if not all_rows:
         logging.error("[ABORT] Scrape produced 0 rows. Skipping truncate; leaving Supabase untouched.")
         return
@@ -595,10 +626,6 @@ async def run_with_optional_upload(scrape_only: bool, only_city: str | None) -> 
             logging.error("[RESTORE] No backup rows available; manual recovery required.")
 
 def _resolve_scrape_only_from_args_env(parsed_value: Optional[bool]) -> bool:
-    """
-    If user passed an explicit flag, honor it.
-    Otherwise, default to True on CI (CI=true), False locally.
-    """
     if parsed_value is not None:
         return parsed_value
     return os.getenv("CI", "").lower() == "true"
