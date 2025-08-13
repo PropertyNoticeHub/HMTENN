@@ -94,7 +94,7 @@ jobs:
               lines.append("|------|--------|")
               for city, reason in failures:
                   lines.append(f"| {city} | {reason} |")
-          
+
           if summary_path and os.path.exists(os.path.dirname(summary_path)):
               with open(summary_path, "a", encoding="utf-8") as fh:
                   fh.write("\n".join(lines) + "\n")
@@ -102,7 +102,6 @@ jobs:
               print("\n".join(lines), flush=True)
 
           # Do NOT fail the job; proceed even with failures so other cities still upload
-          # (If you want the job marked red when there are failures, change the next line to: sys.exit(1 if failures else 0))
           sys.exit(0)
           PY
 
@@ -134,9 +133,24 @@ jobs:
             echo "no package.json; skipping sitemap step"
           fi
 
-      # ---------- Optional: Trigger Vercel deploy (guarded) ----------
+      # ---------- Optional: Trigger Vercel deploy (warning-free guard) ----------
+      - name: Check Vercel secrets
+        id: vercel_check
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_SLUG: ${{ secrets.VERCEL_PROJECT_SLUG }}
+        shell: bash
+        run: |
+          if [[ -n "${VERCEL_TOKEN}" && -n "${VERCEL_PROJECT_SLUG}" ]]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "Vercel deploy: ENABLED"
+          else
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "Vercel deploy: DISABLED (missing secrets)"
+          fi
+
       - name: Trigger Vercel Deploy (optional)
-        if: ${{ secrets.VERCEL_TOKEN && secrets.VERCEL_PROJECT_SLUG }}
+        if: steps.vercel_check.outputs.should_deploy == 'true'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_PROJECT_SLUG: ${{ secrets.VERCEL_PROJECT_SLUG }}
