@@ -136,7 +136,7 @@ jobs:
 
       # ---------- Optional: Trigger Vercel deploy (guarded) ----------
       - name: Trigger Vercel Deploy (optional)
-        if: secrets.VERCEL_TOKEN && secrets.VERCEL_PROJECT_SLUG
+        if: ${{ secrets.VERCEL_TOKEN && secrets.VERCEL_PROJECT_SLUG }}
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_PROJECT_SLUG: ${{ secrets.VERCEL_PROJECT_SLUG }}
