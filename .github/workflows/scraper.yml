@@ -1,21 +1,21 @@
-﻿name: "Nightly Scope-Replace - Scrape-only -> Upload -> Sitemap -> Vercel"
+﻿name: 'Nightly Scope-Replace - Scraper -> Upload (city-by-city) -> Optional Sitemap/Deploy'
 
 on:
   push:
-    branches:
-      - feature/scraper-hardening-v1   # allow runs from your working branch
+    branches: [ main ]         # run on pushes to main
   schedule:
-    - cron: "0 2 * * *"                # 02:00 UTC nightly
-  workflow_dispatch:
+    - cron: "0 8 * * *"        # 08:00 UTC = 2:00 AM CST (3:00 AM during CDT)
+  workflow_dispatch:           # optional manual run
 
 jobs:
-  run-pipeline:
+  scrape-upload:
     runs-on: ubuntu-latest
     env:
       CI: "true"
+      # Supabase creds come from repo secrets (Settings → Secrets and variables → Actions)
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_TABLE: businesses   # write to prod table by default
 
     steps:
       - name: Checkout repo
@@ -32,68 +32,117 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scraper/requirements.txt
 
-      - name: Install Playwright browsers (Chromium + OS deps)
+      - name: Install Playwright Chromium (and OS deps)
         run: |
           python -m playwright install --with-deps chromium
 
-      # ---------- Node (sitemap) ----------
+      # ---------- Nightly scope-replace: loop cities; services from services_seed.json ----------
+      # For each city:
+      #   - scraper reads ALL services from scraper/services_seed.json
+      #   - backs up table
+      #   - deletes ONLY that city's rows
+      #   - uploads fresh rows (including state & maps_url)
+      - name: Run scraper city-by-city with upload (scope-replace)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys, os
+          from subprocess import TimeoutExpired
+
+          # Load cities in stable order (primary + targets)
+          with open('scraper/cities_seed.json','r',encoding='utf-8') as f:
+              metros = json.load(f)
+          seen = set(); order = []
+          for m in metros:
+              targets = [{"name": m["city"]}] + m.get("targets", [])
+              for t in targets:
+                  name = t["name"]
+                  if name not in seen:
+                      seen.add(name); order.append(name)
+
+          print(f"[PLAN] {len(order)} cities -> " + ", ".join(order), flush=True)
+
+          # Per-city timeout (seconds)
+          CITY_TIMEOUT = 900  # 15 minutes
+
+          failures = []
+          for city in order:
+              print(f"\n===== CITY: {city} =====", flush=True)
+              try:
+                  # Run the scraper for a single city with upload
+                  r = subprocess.run(
+                      ['python','scraper/scraper.py','--only-city',city,'--with-upload'],
+                      check=False,
+                      timeout=CITY_TIMEOUT
+                  )
+                  if r.returncode != 0:
+                      failures.append((city, f"exit={r.returncode}"))
+                      print(f"[WARN] City failed: {city} (exit={r.returncode})", flush=True)
+              except TimeoutExpired:
+                  failures.append((city, "timeout"))
+                  print(f"[WARN] City timed out after {CITY_TIMEOUT}s: {city}", flush=True)
+
+          # Write a run summary so you don't have to dig through logs
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+          lines = []
+          lines.append(f"### Nightly scrape summary")
+          lines.append(f"- Total cities planned: **{len(order)}**")
+          lines.append(f"- Failures: **{len(failures)}**")
+          if failures:
+              lines.append("")
+              lines.append("| City | Reason |")
+              lines.append("|------|--------|")
+              for city, reason in failures:
+                  lines.append(f"| {city} | {reason} |")
+          
+          if summary_path and os.path.exists(os.path.dirname(summary_path)):
+              with open(summary_path, "a", encoding="utf-8") as fh:
+                  fh.write("\n".join(lines) + "\n")
+          else:
+              print("\n".join(lines), flush=True)
+
+          # Do NOT fail the job; proceed even with failures so other cities still upload
+          # (If you want the job marked red when there are failures, change the next line to: sys.exit(1 if failures else 0))
+          sys.exit(0)
+          PY
+
+      # ---------- Save exports (debugging/traceability) ----------
+      - name: Upload exports as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-exports-${{ github.run_id }}
+          path: scraper/exports/*.json
+
+      # ---------- Optional: Node (for sitemap) ----------
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
 
-      - name: Install Node deps (if package.json present)
-        run: |
-          if [ -f package-lock.json ]; then npm ci; elif [ -f package.json ]; then npm install; else echo "No package.json; skipping npm install"; fi
-
-      # ---------- Scrape-only (no DB writes inside scraper) ----------
-      - name: Run scraper (scrape-only)
-        run: |
-          python scraper/scraper.py --scrape-only
-        env:
-          SERVICES: handyman
-
-      # ---------- Uploader: Scope-Replace (UPSERT + scoped deletes) ----------
-      - name: Run uploader (UPSERT + scoped deletes)
-        run: |
-          python scraper/upload_to_supabase.py --apply-deletes
-
-      # ---------- Sitemap from live DB (guarded) ----------
-      - name: Regenerate sitemap (Node script)
-        run: |
-          npm run sitemap || echo "No sitemap script or frontend not ready — skipping"
+      # ---------- Optional: Sitemap from live DB (guarded) ----------
+      - name: Regenerate sitemap (optional)
+        shell: bash
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -f package.json ]; then
+            npm ci || npm install
+            npm run sitemap || echo "sitemap step skipped"
+          else
+            echo "no package.json; skipping sitemap step"
+          fi
 
-      # ---------- Artifacts (exports, optional sitemap) ----------
-      - name: Upload exports as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: scraper-exports-${{ github.run_id }}
-          path: |
-            scraper/exports/*.json
-
-      - name: Upload sitemap if present
-        if: ${{ hashFiles('public/sitemap.xml') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sitemap-${{ github.run_id }}
-          path: public/sitemap.xml
-
-      # ---------- Trigger Vercel deployment via API (guarded) ----------
-      - name: Trigger Vercel Deploy (Deployments API)
+      # ---------- Optional: Trigger Vercel deploy (guarded) ----------
+      - name: Trigger Vercel Deploy (optional)
+        if: secrets.VERCEL_TOKEN && secrets.VERCEL_PROJECT_SLUG
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_PROJECT_SLUG: ${{ secrets.VERCEL_PROJECT_SLUG }}
         run: |
-          if [ -z "${VERCEL_PROJECT_SLUG}" ]; then
-            echo "VERCEL_PROJECT_SLUG not set; skipping Vercel deploy trigger."
-            exit 0
-          fi
           curl -fsS -X POST "https://api.vercel.com/v13/deployments" \
             -H "Authorization: Bearer ${VERCEL_TOKEN}" \
             -H "Content-Type: application/json" \
             --data-raw "{\"name\":\"${VERCEL_PROJECT_SLUG}\",\"project\":\"${VERCEL_PROJECT_SLUG}\"}" \
-            || echo "Warning: Vercel deploy trigger failed; check VERCEL_TOKEN/VERCEL_PROJECT_SLUG or project link."
+          || echo "Vercel trigger failed (non-blocking)."
