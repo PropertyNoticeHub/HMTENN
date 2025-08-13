@@ -1,10 +1,11 @@
-# scraper/scraper.py
+﻿# scraper/scraper.py
 # Production-hardened Google Maps scraper for TN queries
 # Phase 1 changes (no API, no place_id):
 # - Add state="TN" (seed-driven; no address parsing)
 # - Add maps_url from page.url()
 # - Read services from scraper/services_seed.json when SERVICES is empty
 # - Upload payload remains unchanged (no new columns touched)
+# + SEO PIN (OFF by default): ensure_pinned_top to optionally move/inject a brand row at index 0 for selected cities
 
 import asyncio
 import json
@@ -134,6 +135,63 @@ def promote_handyman_tn(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     featured = [r for r in records if is_handyman_tn(r.get("website"))]
     non_featured = [r for r in records if not is_handyman_tn(r.get("website"))]
     return featured + non_featured
+
+# ---------- SEO PIN: keep our brand first for selected cities (OFF by default) ----------
+PIN_ENABLE = (os.getenv("PIN_ENABLE", "false").strip().lower() != "false")  # default OFF
+PIN_DOMAIN = os.getenv("PIN_DOMAIN", "handyman-tn.com").strip().lower()
+PIN_FORCE_TOP_CITIES = {c.strip() for c in os.getenv("PIN_FORCE_TOP_CITIES", "Franklin,Brentwood").split(",") if c.strip()}
+PIN_NAME = os.getenv("PIN_NAME", "HANDYMAN-TN LLC")
+PIN_WEBSITE = os.getenv("PIN_WEBSITE", "https://www.handyman-tn.com")
+PIN_MAPS_URL = os.getenv("PIN_MAPS_URL", "")  # optional
+PIN_PHONE = os.getenv("PIN_PHONE", "")        # optional
+PIN_ADDRESS = os.getenv("PIN_ADDRESS", "")    # optional
+
+def _is_pin_domain(url: Optional[str]) -> bool:
+    if not url:
+        return False
+    u = url.lower().strip()
+    u = re.sub(r"^https?://", "", u)
+    u = re.sub(r"^www\.", "", u)
+    return PIN_DOMAIN in u
+
+def ensure_pinned_top(records: List[Dict[str, Any]], city: str, service: str) -> List[Dict[str, Any]]:
+    """
+    Guarantee exactly one pinned row at index 0 for selected cities.
+    1) If an item with PIN_DOMAIN exists -> move it to front.
+    2) Otherwise -> inject a minimal pinned item at index 0.
+    De-dupe still runs afterwards; DB uniqueness enforces (city, service, business_key).
+    """
+    if not PIN_ENABLE:
+        return records
+    if city not in PIN_FORCE_TOP_CITIES:
+        return records
+
+    # Promote existing row if domain matches
+    for i, r in enumerate(records):
+        if _is_pin_domain(r.get("website", "")):
+            if i != 0:
+                rec = records.pop(i)
+                records.insert(0, rec)
+            logging.info(f"[PIN] Promoted to top for {city} / {service}")
+            return records
+
+    # Inject minimal row if nothing to promote
+    injected = {
+        "name": PIN_NAME,
+        "address": PIN_ADDRESS,
+        "phone": PIN_PHONE,
+        "website": PIN_WEBSITE,
+        "city": city,
+        "service": service,
+        "state": STATE_VALUE,
+        "maps_url": PIN_MAPS_URL,  # OK if blank
+        "review_count": None,
+        "avg_rating": None,
+    }
+    records.insert(0, injected)
+    logging.info(f"[PIN] Injected for {city} / {service} (none found)")
+    return records
+# ---------- /SEO PIN ----------
 
 def deduplicate_local(businesses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # Keep existing dedupe (name+website) to avoid risk changes
@@ -526,6 +584,8 @@ async def scrape_city(context, browser, target_city: str, target_county: str, se
                 await asyncio.sleep(0.25)
             await detail_page.close()
 
+        # PIN (if enabled) -> local de-dupe -> promote our brand -> global seen
+        results = ensure_pinned_top(results, target_city, service)
         results = deduplicate_local(results)
         results = promote_handyman_tn(results)
         add_to_global_seen(results)
