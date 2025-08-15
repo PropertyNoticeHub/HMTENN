@@ -1,26 +1,54 @@
-﻿name: 'Nightly Scope-Replace - Scraper -> Upload (city-by-city) -> Optional Sitemap/Deploy'
+name: "Nightly Scope-Replace - Scraper -> Upload (city-by-city) -> Optional Sitemap/Deploy"
 
 on:
   push:
-    branches: [ main ]         # run on pushes to main
+    branches: [ main ]
   schedule:
-    - cron: "0 8 * * *"        # 08:00 UTC = 2:00 AM CST (3:00 AM during CDT)
-  workflow_dispatch:           # optional manual run
+    # Run once daily at 07:30 UTC (~1:30 AM Central Standard Time; ~2:30 AM during Daylight Time)
+    - cron: "30 7 * * *"
+  workflow_dispatch:
 
 jobs:
   scrape-upload:
     runs-on: ubuntu-latest
     env:
+      # Show timestamps in logs as Central; does not affect scheduling
+      TZ: "America/Chicago"
+
+      # CI flag so the scraper knows it's running in automation
       CI: "true"
-      # Supabase creds come from repo secrets (Settings → Secrets and variables → Actions)
+
+      # Supabase
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-      SUPABASE_TABLE: businesses   # write to prod table by default
-      PIN_ENABLE: "true"           # enable PIN injection from scraper/pin_insert.json
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_TABLE: businesses
+
+      # --- PIN controls ---
+      PIN_ENABLE: "true"
+      PIN_FORCE_TOP_CITIES: "Franklin,Brentwood"
+      PIN_NAME: "HANDYMAN-TN LLC"
+      PIN_WEBSITE: "https://www.handyman-tn.com"
+      PIN_MAPS_URL: ""
+      PIN_PHONE: ""
+      PIN_ADDRESS: ""
+
+      # --- Optional small-batch controls (set as repo SECRETS when you want a tiny run) ---
+      CITY_SAMPLE: ${{ secrets.CITY_SAMPLE }}   # e.g. "Blountville,Kingsport"
+      SERVICES:    ${{ secrets.SERVICES }}      # e.g. ["handyman","tv mounting"]
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Sanity check � Supabase service key present?
+        shell: bash
+        run: |
+          if [ -z "${SUPABASE_SERVICE_ROLE_KEY}" ]; then
+            echo "Missing SUPABASE_SERVICE_ROLE_KEY secret. Failing early."
+            exit 1
+          fi
+          echo "Service key present."
 
       # ---------- Python + Playwright (scraper) ----------
       - name: Set up Python
@@ -37,12 +65,7 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      # ---------- Nightly scope-replace: loop cities; services from services_seed.json ----------
-      # For each city:
-      #   - scraper reads ALL services from scraper/services_seed.json
-      #   - backs up table
-      #   - deletes ONLY that city's rows
-      #   - uploads fresh rows (including state & maps_url)
+      # ---------- Nightly (or tiny) scope-replace ----------
       - name: Run scraper city-by-city with upload (scope-replace)
         shell: bash
         run: |
@@ -50,27 +73,28 @@ jobs:
           import json, subprocess, sys, os
           from subprocess import TimeoutExpired
 
-          # Load cities in stable order (primary + targets)
-          with open('scraper/cities_seed.json','r',encoding='utf-8') as f:
-              metros = json.load(f)
-          seen = set(); order = []
-          for m in metros:
-              targets = [{"name": m["city"]}] + m.get("targets", [])
-              for t in targets:
-                  name = t["name"]
-                  if name not in seen:
-                      seen.add(name); order.append(name)
+          # Build the city list:
+          city_sample = (os.environ.get('CITY_SAMPLE') or '').strip()
+          if city_sample:
+              order = [c.strip() for c in city_sample.split(',') if c.strip()]
+          else:
+              with open('scraper/cities_seed.json','r',encoding='utf-8') as f:
+                  metros = json.load(f)
+              seen = set(); order = []
+              for m in metros:
+                  targets = [{"name": m["city"]}] + m.get("targets", [])
+                  for t in targets:
+                      name = t["name"]
+                      if name not in seen:
+                          seen.add(name); order.append(name)
 
           print(f"[PLAN] {len(order)} cities -> " + ", ".join(order), flush=True)
 
-          # Per-city timeout (seconds)
-          CITY_TIMEOUT = 900  # 15 minutes
-
+          CITY_TIMEOUT = 900
           failures = []
           for city in order:
               print(f"\n===== CITY: {city} =====", flush=True)
               try:
-                  # Run the scraper for a single city with upload
                   r = subprocess.run(
                       ['python','scraper/scraper.py','--only-city',city,'--with-upload'],
                       check=False,
@@ -83,7 +107,6 @@ jobs:
                   failures.append((city, "timeout"))
                   print(f"[WARN] City timed out after {CITY_TIMEOUT}s: {city}", flush=True)
 
-          # Write a run summary so you don't have to dig through logs
           summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
           lines = []
           lines.append(f"### Nightly scrape summary")
@@ -102,11 +125,9 @@ jobs:
           else:
               print("\n".join(lines), flush=True)
 
-          # Do NOT fail the job; proceed even with failures so other cities still upload
           sys.exit(0)
           PY
 
-      # ---------- Save exports (debugging/traceability) ----------
       - name: Upload exports as artifact
         uses: actions/upload-artifact@v4
         with:
@@ -120,7 +141,6 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      # ---------- Optional: Sitemap from live DB (guarded) ----------
       - name: Regenerate sitemap (optional)
         shell: bash
         env:
@@ -134,7 +154,6 @@ jobs:
             echo "no package.json; skipping sitemap step"
           fi
 
-      # ---------- Optional: Trigger Vercel deploy (warning-free guard) ----------
       - name: Check Vercel secrets
         id: vercel_check
         env:
