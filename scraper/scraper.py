@@ -1,11 +1,10 @@
 ﻿# scraper/scraper.py
 # Production-hardened Google Maps scraper for TN queries
-# Phase 1 changes (no API, no place_id):
-# - Add state="TN" (seed-driven; no address parsing)
-# - Add maps_url from page.url()
-# - Read services from scraper/services_seed.json when SERVICES is empty
-# - Upload payload remains unchanged (no new columns touched)
-# + SEO PIN (OFF by default): ensure_pinned_top to optionally move/inject a brand row at index 0 for selected cities
+# - State fixed to TN
+# - Maps URL captured and used for stable fingerprinting
+# - Services loaded from env or scraper/services_seed.json
+# - Local + batch dedupe mirrors DB generated column
+# - Per-city upload with snapshot and auto-restore on failure
 
 import asyncio
 import json
@@ -29,7 +28,12 @@ import argparse
 load_dotenv(dotenv_path=".env.local")
 
 SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-SUPABASE_KEY = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+
+# ------ CHANGE #1: prefer service role key if present; fall back to anon ------
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_KEY = SUPABASE_SERVICE_ROLE_KEY or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+# ------------------------------------------------------------------------------
+
 SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "businesses")
 
 EXPORT_DIR = Path("scraper/exports")
@@ -56,7 +60,6 @@ BLOCK_URL_PATTERNS = [
 HANDYMAN_TN_DOMAIN_KEY = "handyman-tn.com"
 SUPABASE_CHUNK_SIZE = 500
 
-# Phase 1: fixed state for Tennessee
 STATE_VALUE = "TN"
 
 LOGGING_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
@@ -70,6 +73,16 @@ GLOBAL_SEEN: Set[Tuple[str, str]] = set()
 
 def _now_ts() -> str:
     return datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+def _append_summary_line(line: str) -> None:
+    """Append a single line to the GitHub job summary, if available."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    try:
+        if path and os.path.exists(os.path.dirname(path)):
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line.rstrip() + "\n")
+    except Exception:
+        pass
 
 # ------------------------
 # Services (multi-service, env or seed file)
@@ -121,7 +134,7 @@ def get_services() -> List[str]:
 def normalize_text(s: Optional[str]) -> str:
     if not s:
         return ""
-    return re.sub(r"\s+", " ", s.strip().lower())
+    return re.sub(r"\s+", " ", s.strip()).lower()
 
 def is_handyman_tn(url: Optional[str]) -> bool:
     if not url:
@@ -193,21 +206,76 @@ def ensure_pinned_top(records: List[Dict[str, Any]], city: str, service: str) ->
     return records
 # ---------- /SEO PIN ----------
 
+# ---------- DB-mirrored local fingerprint & dedupe ----------
+def _normalize_website_for_key(website: Optional[str]) -> str:
+    """
+    Mirror the DB's normalization used inside business_key:
+    - strip protocol and 'www.'
+    - strip trailing slash
+    - lower-case
+    - return '' if missing (the caller will convert to 'no-site')
+    """
+    if not website:
+        return ""
+    u = website.strip()
+    u = re.sub(r"^https?://", "", u, flags=re.I)
+    u = re.sub(r"^www\.", "", u, flags=re.I)
+    u = u.rstrip("/")
+    return u.lower()
+
+def _business_key_for_local(row: Dict[str, Any]) -> str:
+    """
+    EXACT mirror of the DB's generated business_key:
+      case when maps_url present -> lower(trim(maps_url))
+      else lower(name with collapsed whitespace) + '|' + normalized website (or 'no-site')
+    """
+    maps_url = (row.get("maps_url") or "").strip()
+    if maps_url:
+        return maps_url.lower()
+    name_norm = normalize_text(row.get("name"))  # collapses internal whitespace + lower
+    site_norm = _normalize_website_for_key(row.get("website"))
+    return f"{name_norm}|{(site_norm or 'no-site')}"
+
 def deduplicate_local(businesses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    # Keep existing dedupe (name+website) to avoid risk changes
+    """
+    Deduplicate in-memory using the same fingerprint the DB uses (business_key),
+    and include service in the key to keep per-service rows distinct (DB unique is on city, service, business_key).
+    """
     seen: Set[Tuple[str, str]] = set()
     unique: List[Dict[str, Any]] = []
     for b in businesses:
-        website = normalize_text(b.get("website"))
-        name = normalize_text(b.get("name"))
-        key = (name, website)
-        if is_handyman_tn(website):
-            unique.append(b)
+        service = normalize_text(b.get("service"))
+        key = _business_key_for_local(b)
+        pair = (service, key)
+        if pair in seen:
             continue
-        if key not in seen:
-            seen.add(key)
-            unique.append(b)
+        seen.add(pair)
+        unique.append(b)
     return unique
+# ---------- /DB-mirrored ----------
+
+# ---------- Batch-level dedupe across all rows ----------
+def deduplicate_across_all_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Final safety net: remove duplicates across *all* rows being uploaded.
+    Mirrors DB unique (city, service, business_key).
+    """
+    seen: Set[Tuple[str, str, str]] = set()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        city = (r.get("city") or "").strip()      # keep exact case; DB uses text
+        service = normalize_text(r.get("service"))
+        key = _business_key_for_local(r)
+        trip = (city, service, key)
+        if trip in seen:
+            continue
+        seen.add(trip)
+        out.append(r)
+    dropped = len(rows) - len(out)
+    if dropped:
+        logging.info(f"[DEDUPE] Batch-level removed {dropped} duplicate rows before upload.")
+    return out
+# ---------- /Batch-level ----------
 
 def add_to_global_seen(businesses: List[Dict[str, Any]]) -> None:
     for b in businesses:
@@ -246,7 +314,7 @@ def _parse_float(val: Any) -> Optional[float]:
     return None
 
 # ------------------------
-# Supabase helpers (payload includes Phase 1 fields)
+# Supabase helpers (city-scoped snapshot & restore)
 # ------------------------
 def _sb_headers(json_mode: bool = False) -> Dict[str, str]:
     h = {
@@ -257,92 +325,61 @@ def _sb_headers(json_mode: bool = False) -> Dict[str, str]:
         h["Content-Type"] = "application/json"
     return h
 
-def backup_supabase_table() -> List[Dict[str, Any]]:
-    page = 0
-    page_size = 1000
-    all_rows: List[Dict[str, Any]] = []
-    while True:
-        start = page * page_size
-        end = start + page_size - 1
-        headers = _sb_headers()
-        headers["Range"] = f"{start}-{end}"
-        try:
-            resp = requests.get(
-                f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*",
-                headers=headers,
-                timeout=60,
-            )
-        except requests.RequestException as e:
-            logging.error(f"[SUPABASE BACKUP] network error: {e}")
-            break
-        if resp.status_code not in (200, 206):
-            logging.error(f"[SUPABASE BACKUP] failed page {page}: {resp.status_code} {resp.text}")
-            break
-        batch = resp.json()
-        if not isinstance(batch, list):
-            logging.error("[SUPABASE BACKUP] unexpected response shape (not a list)")
-            break
-        all_rows.extend(batch)
-        if len(batch) < page_size:
-            break
-        page += 1
-
-    ts = _now_ts()
-    backup_path = EXPORT_DIR / f"supabase_{SUPABASE_TABLE}_backup_{ts}.json"
+def backup_supabase_city(city: str) -> List[Dict[str, Any]]:
+    """Snapshot ONLY one city's rows before we delete that city."""
+    headers = _sb_headers()
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?city=eq.{quote(city)}&select=*"
     try:
-        with open(backup_path, "w", encoding="utf-8") as f:
-            json.dump(all_rows, f, ensure_ascii=False, indent=2)
-        logging.info(f"[SUPABASE BACKUP] {len(all_rows)} rows -> {backup_path}")
-    except Exception as e:
-        logging.error(f"[SUPABASE BACKUP] write failed: {e}")
-    return all_rows
+        resp = requests.get(url, headers=headers, timeout=60)
+        resp.raise_for_status()
+        rows = resp.json()
+        if not isinstance(rows, list):
+            logging.error(f"[CITY BACKUP] {city}: unexpected response shape")
+            return []
+        ts = _now_ts()
+        city_slug = city.lower().replace(" ", "_")
+        path = EXPORT_DIR / f"city_backup_{city_slug}_{ts}.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(rows, f, ensure_ascii=False, indent=2)
+        logging.info(f"[CITY BACKUP] {city}: {len(rows)} rows -> {path}")
+        return rows
+    except requests.RequestException as e:
+        logging.error(f"[CITY BACKUP] {city}: network error: {e}")
+        return []
 
-def truncate_supabase_table(only_city: Optional[str]) -> bool:
-    """
-    Supabase REST blocks full-table DELETE without a filter.
-    If only_city is provided (e.g., --only-city 'Franklin'), delete just that scope.
-    """
-    if only_city:
-        logging.info(f"[SUPABASE] Deleting rows from {SUPABASE_TABLE} where city='{only_city}'...")
-        url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?city=eq.{quote(only_city)}"
-    else:
-        logging.info(f"[SUPABASE] Truncating {SUPABASE_TABLE} table before upload...")
-        url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
-
-    resp = requests.delete(
-        url,
-        headers={**_sb_headers(), "Prefer": "return=minimal"},
-        timeout=60,
-    )
+def delete_supabase_city(city: str) -> bool:
+    """Delete all rows for a specific city."""
+    logging.info(f"[SUPABASE] Deleting rows from {SUPABASE_TABLE} where city='{city}'...")
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?city=eq.{quote(city)}"
+    resp = requests.delete(url, headers={**_sb_headers(), "Prefer": "return=minimal"}, timeout=60)
     if resp.status_code in (200, 204):
         logging.info("[SUPABASE] Delete completed.")
         return True
-
-    # Common safety error from PostgREST when no WHERE clause is provided.
     logging.error(f"[SUPABASE] Failed to delete: {resp.status_code} {resp.text}")
     return False
 
 def _normalize_payload_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    # Include new Phase 1 fields now that staging has columns.
-    STRING_FIELDS = {"name", "address", "phone", "website", "city", "service", "state", "maps_url"}
-    INT_FIELDS = {"review_count"}
-    FLOAT_FIELDS = {"avg_rating"}
+    # Select only the columns that exist in the database table
+    fields = {"name", "address", "phone", "website", "city", "service", "state", "maps_url", "review_count", "avg_rating"}
+    payload = {k: row.get(k) for k in fields}
 
-    payload: Dict[str, Any] = {k: row.get(k) for k in (STRING_FIELDS | INT_FIELDS | FLOAT_FIELDS)}
-    for k in STRING_FIELDS:
+    # normalize strings
+    for k in {"name", "address", "phone", "website", "city", "service", "state", "maps_url"}:
         v = payload.get(k)
-        payload[k] = v if isinstance(v, str) and v.strip() != "" else (v.strip() if isinstance(v, str) else "")
-    if "review_count" in payload:
-        payload["review_count"] = _parse_int(payload.get("review_count"))
-    if "avg_rating" in payload:
-        payload["avg_rating"] = _parse_float(payload.get("avg_rating"))
+        payload[k] = str(v).strip() if v is not None else ""
+
+    # numeric parsing
+    payload["review_count"] = _parse_int(payload.get("review_count"))
+    payload["avg_rating"] = _parse_float(payload.get("avg_rating"))
     return payload
 
 def upload_businesses_chunked(businesses: List[Dict[str, Any]]) -> None:
     if not businesses:
         logging.info("[UPLOAD] Nothing to upload.")
         return
-    headers = {**_sb_headers(json_mode=True), "Prefer": "return=representation"}
+    # ------ CHANGE #2: use minimal return to avoid follow-up SELECT under RLS ------
+    headers = {**_sb_headers(json_mode=True), "Prefer": "return=minimal"}
+    # ------------------------------------------------------------------------------
     total = len(businesses)
     sent = 0
     for i in range(0, total, SUPABASE_CHUNK_SIZE):
@@ -355,23 +392,29 @@ def upload_businesses_chunked(businesses: List[Dict[str, Any]]) -> None:
                 json=payload,
                 timeout=120,
             )
+            resp.raise_for_status()
         except requests.RequestException as e:
-            raise RuntimeError(f"[UPLOAD] network error on chunk {i//SUPABASE_CHUNK_SIZE}: {e}")
-        if resp.status_code != 201:
-            raise RuntimeError(f"[UPLOAD] failed chunk {i//SUPABASE_CHUNK_SIZE}: {resp.status_code} {resp.text}")
+            # Propagate with details for higher-level recovery
+            details = e.response.text if getattr(e, "response", None) is not None else str(e)
+            raise RuntimeError(f"[UPLOAD] failed chunk {i//SUPABASE_CHUNK_SIZE}: {details}") from e
         sent += len(chunk)
         logging.info(f"[UPLOAD] {sent}/{total} inserted")
 
-def restore_supabase_from_backup(backup_rows: List[Dict[str, Any]]) -> None:
-    logging.warning("[RESTORE] Attempting restore from backup...")
-    if not truncate_supabase_table(None):
-        logging.error("[RESTORE] Could not delete existing rows before restore.")
+def restore_supabase_city(city: str, backup_rows: List[Dict[str, Any]]) -> None:
+    """Restore ONLY one city's rows from a just-taken snapshot."""
+    logging.warning(f"[RESTORE] City={city}: attempting city-scoped restore...")
+    if not backup_rows:
+        logging.warning(f"[RESTORE] City={city}: no snapshot; leaving city empty.")
+        return
+    if not delete_supabase_city(city):
+        logging.error(f"[RESTORE] City={city}: could not clear partial rows before restore.")
         return
     try:
         upload_businesses_chunked(backup_rows)
-        logging.warning("[RESTORE] Backup restore completed.")
+        logging.warning(f"[RESTORE] City={city}: restore completed ({len(backup_rows)} rows).")
+        _append_summary_line(f"- **RESTORED** city **{city}** from snapshot after upload failure.")
     except Exception as e:
-        logging.error(f"[RESTORE] Failed to restore backup: {e}")
+        logging.error(f"[RESTORE] City={city}: restore failed: {e}")
 
 # ------------------------
 # Playwright helpers
@@ -427,7 +470,6 @@ async def parse_detail(page, url: str, city: str, service: str) -> Optional[Dict
         "service": service,
         "review_count": None,
         "avg_rating": None,
-        # New fields for Phase 1
         "state": STATE_VALUE,
         "maps_url": "",
     }
@@ -497,6 +539,7 @@ async def parse_detail(page, url: str, city: str, service: str) -> Optional[Dict
                 except ValueError:
                     pass
 
+        # Global seen: skip exact name+website repeats across this service run (non-brand)
         if business["name"] and business["website"]:
             if not is_handyman_tn(business["website"]) and is_globally_seen(business["name"], business["website"]):
                 logging.info(f"[SKIP DUP-GLOBAL] {business['name']} ({business['website']})")
@@ -602,7 +645,7 @@ async def scrape_city(context, browser, target_city: str, target_county: str, se
             pass
         return results
 
-async def scrape_and_collect_for_target(browser, target_city: str, target_county: str, service: str) -> List[Dict[str, Any]]:      
+async def scrape_and_collect_for_target(browser, target_city: str, target_county: str, service: str) -> List[Dict[str, Any]]:
     city_slug = target_city.lower().replace(" ", "_")
     service_slug = service.lower().replace(" ", "_")
     deep_path = EXPORT_DIR / f"{city_slug}_{service_slug}_deep.json"
@@ -635,7 +678,7 @@ async def scrape_and_collect_for_target(browser, target_city: str, target_county
     logging.warning(f"[SKIP] No results to save for {target_city}")
     return []
 
-async def collect_all_rows(only_city: str | None) -> List[Dict[str, Any]]:
+async def collect_all_rows(only_city: Optional[str]) -> List[Dict[str, Any]]:
     services = get_services()
     logging.info(f"[RUN] Services: {services}")
 
@@ -665,56 +708,66 @@ async def collect_all_rows(only_city: str | None) -> List[Dict[str, Any]]:
             await browser.close()
     return all_rows
 
-async def run_with_optional_upload(scrape_only: bool, only_city: str | None) -> None:
+def run_with_upload_logic(all_rows: List[Dict[str, Any]], only_city: str):
     """
-    If scrape_only=True -> just scrape and write exports. NEVER touch DB.
-    If scrape_only=False -> backup -> scoped delete (if only_city) -> upload.
+    Encapsulates per-city snapshot -> delete -> upload, with auto-restore on failure.
     """
-    all_rows = await collect_all_rows(only_city)
-
-    if scrape_only:
-        logging.info("[MODE] SCRAPE-ONLY: Completed. No DB writes performed.")
-        if not all_rows:
-            logging.warning("[SCRAPE-ONLY] 0 rows produced.")
-        return
-
     if not all_rows:
-        logging.error("[ABORT] Scrape produced 0 rows. Skipping delete; leaving Supabase untouched.")
+        logging.error("[ABORT] Scrape produced 0 rows.")
         return
 
-    backup_rows = backup_supabase_table()
+    # Batch-level dedupe before touching DB
+    all_rows = deduplicate_across_all_rows(all_rows)
 
-    if not truncate_supabase_table(only_city):
-        logging.error("[ABORT] Delete failed; leaving existing data in place.")
+    # City-scoped snapshot
+    city_snapshot = backup_supabase_city(only_city)
+
+    # Delete only this city
+    if not delete_supabase_city(only_city):
+        logging.error("[ABORT] Initial delete failed.")
         return
 
+    # Try upload; if it fails (e.g., 23505), restore the city snapshot
     try:
         upload_businesses_chunked(all_rows)
-        logging.info(f"[DONE] Uploaded {len(all_rows)} total rows across services: {get_services()}")
+        logging.info(f"[DONE] Uploaded {len(all_rows)} rows for city: {only_city}")
     except Exception as e:
         logging.error(f"[UPLOAD ERROR] {e}")
-        if backup_rows:
-            restore_supabase_from_backup(backup_rows)
-        else:
-            logging.error("[RESTORE] No backup rows available; manual recovery required.")
+        restore_supabase_city(only_city, city_snapshot)
 
-def _resolve_scrape_only_from_args_env(parsed_value: Optional[bool]) -> bool:
+# ------------------------
+# Main execution block
+# ------------------------
+def _resolve_with_upload_from_args_env(parsed_value: Optional[bool]) -> bool:
     if parsed_value is not None:
         return parsed_value
-    return os.getenv("CI", "").lower() == "true"
+    # default: upload locally, scrape-only on CI
+    return os.getenv("CI", "").lower() != "true"
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="TN Google Maps scraper (exports only by default on CI).")
-    parser.add_argument("--only-city", default=None, help='Limit to one city, e.g. "Franklin"')
+    parser = argparse.ArgumentParser(description="TN Google Maps scraper.")
+    parser.add_argument("--only-city", default=None, help="Limit to one city, e.g., 'Franklin'")
+
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--scrape-only", dest="scrape_only", action="store_true",
+    group.add_argument("--scrape-only", dest="with_upload", action="store_false",
                        help="Scrape and write JSON exports only (NEVER touch DB).")
-    group.add_argument("--with-upload", dest="scrape_only", action="store_false",
-                       help="After scraping, run backup->scoped delete->upload (local/manual or CI-gated).")
-    parser.set_defaults(scrape_only=None)
+    group.add_argument("--with-upload", dest="with_upload", action="store_true",
+                       help="After scraping, run city snapshot -> scoped delete -> upload (with auto-restore on failure).")
+
+    parser.set_defaults(with_upload=None)
     args = parser.parse_args()
 
-    scrape_only = _resolve_scrape_only_from_args_env(args.scrape_only)
-    logging.info(f"[CONFIG] scrape_only={scrape_only} (CI={os.getenv('CI','')})")
+    with_upload = _resolve_with_upload_from_args_env(args.with_upload)
+    logging.info(f"[CONFIG] with_upload={with_upload} (CI={os.getenv('CI','')})")
 
-    asyncio.run(run_with_optional_upload(scrape_only, args.only_city))
+    # Collect rows
+    all_rows = asyncio.run(collect_all_rows(args.only_city))
+
+    # If uploading, require --only-city to keep operations scoped & safe
+    if with_upload:
+        if not args.only_city:
+            logging.warning("[SAFEGUARD] Multi-city upload disabled. Use --scrape-only or specify --only-city.")
+        else:
+            run_with_upload_logic(all_rows, args.only_city)
+    else:
+        logging.info("[MODE] SCRAPE-ONLY: Completed. No DB writes performed.")
